@@ -54,6 +54,53 @@ function App() {
   const [authLoading, setAuthLoading] = useState(false);
   const [showTaskModal, setShowTaskModal] = useState(false);
   const [modalTask, setModalTask] = useState(null);
+  const [chatInput, setChatInput] = useState('');
+  const [theme, setTheme] = useState('light');
+  const [selectedTasks, setSelectedTasks] = useState([]);
+  const [showPwdModal, setShowPwdModal] = useState(false);
+  const [oldPwd, setOldPwd] = useState('');
+  const [newPwd, setNewPwd] = useState('');
+  const [pwdMsg, setPwdMsg] = useState('');
+  const [alarmRules, setAlarmRules] = useState([]);
+  const [showAlarmModal, setShowAlarmModal] = useState(false);
+  const [editRule, setEditRule] = useState(null);
+  const [alarmMsg, setAlarmMsg] = useState('');
+
+  const toggleTaskSelect = (taskId) => {
+    setSelectedTasks(selectedTasks.includes(taskId)
+      ? selectedTasks.filter(id => id !== taskId)
+      : [...selectedTasks, taskId]);
+  };
+  const selectAllTasks = () => {
+    if (selectedTasks.length === tasks.length) setSelectedTasks([]);
+    else setSelectedTasks(tasks.map(t => t.task_id));
+  };
+  const batchDeleteTasks = () => {
+    setTasks(tasks.filter(t => !selectedTasks.includes(t.task_id)));
+    setSelectedTasks([]);
+    // TODO: 可调用后端批量删除接口
+  };
+  const batchExportTasks = () => {
+    const exportData = tasks.filter(t => selectedTasks.includes(t.task_id));
+    const md = exportData.map(t => `## 任务ID: ${t.task_id}\n- 类型: ${t.model}\n- 状态: ${t.status}\n- 时间: ${t.timestamp}\n- Prompt: ${t.prompt}\n- AI回复: ${t.result}\n`).join('\n---\n');
+    const blob = new Blob([md], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `SmartOpsAI-Tasks-${Date.now()}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const themeStyle = theme === 'dark' ? `
+body, .smartops-main { background: #181c20 !important; color: #eee !important; }
+.smartops-table, .smartops-table th, .smartops-table td { background: #23272e !important; color: #eee !important; }
+.smartops-modal { background: #23272e !important; color: #eee !important; }
+.smartops-btn { background: #23272e !important; color: #eee !important; border: 1px solid #444 !important; }
+.smartops-input { background: #23272e !important; color: #eee !important; border: 1px solid #444 !important; }
+` : '';
+
+  const toggleTheme = () => setTheme(theme === 'light' ? 'dark' : 'light');
 
   // 聊天历史持久化
   useEffect(() => {
@@ -342,6 +389,17 @@ function App() {
     marginLeft: 12,
   };
 
+  // 响应式主容器样式
+  const responsiveStyle = `
+@media (max-width: 600px) {
+  .smartops-main { padding: 6px !important; margin: 0 !important; border-radius: 0 !important; }
+  .smartops-table th, .smartops-table td { padding: 4px !important; font-size: 12px !important; }
+  .smartops-modal { width: 98vw !important; min-width: 0 !important; padding: 10px !important; }
+  .smartops-btn { font-size: 13px !important; padding: 4px 8px !important; }
+  .smartops-input { font-size: 14px !important; padding: 4px 6px !important; }
+}
+`;
+
   // 获取历史
   const fetchHistory = async () => {
     try {
@@ -517,334 +575,517 @@ function App() {
     setModalTask(null);
   };
 
+  const handleChangePwd = async () => {
+    setPwdMsg('');
+    if (!oldPwd || !newPwd) {
+      setPwdMsg('请输入原密码和新密码');
+      return;
+    }
+    // 假设有 /api/change_password 接口
+    try {
+      const res = await authFetch('http://127.0.0.1:8000/api/change_password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ old_password: oldPwd, new_password: newPwd })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setPwdMsg('修改成功！');
+        setOldPwd(''); setNewPwd('');
+        setTimeout(() => setShowPwdModal(false), 1200);
+      } else {
+        setPwdMsg(data.detail || '修改失败');
+      }
+    } catch {
+      setPwdMsg('请求失败');
+    }
+  };
+
+  // 聊天输入区快捷键支持
+  const handleChatInputKeyDown = (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      if (model === 'deepseek') {
+        handleStreamSend();
+      } else {
+        handleSend();
+      }
+    }
+  };
+
+  const fetchAlarmRules = async () => {
+    try {
+      const res = await authFetch('http://127.0.0.1:8000/api/alarm_rules');
+      const data = await res.json();
+      setAlarmRules(Array.isArray(data) ? data : []);
+    } catch { setAlarmRules([]); }
+  };
+  useEffect(() => { if (token) fetchAlarmRules(); }, [token]);
+
+  const handleSaveRule = async () => {
+    setAlarmMsg('');
+    const method = editRule.id ? 'PUT' : 'POST';
+    const url = editRule.id ? `http://127.0.0.1:8000/api/alarm_rules/${editRule.id}` : 'http://127.0.0.1:8000/api/alarm_rules';
+    try {
+      const res = await authFetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(editRule)
+      });
+      if (res.ok) {
+        setAlarmMsg('保存成功！');
+        setShowAlarmModal(false);
+        fetchAlarmRules();
+      } else {
+        const data = await res.json();
+        setAlarmMsg(data.detail || '保存失败');
+      }
+    } catch { setAlarmMsg('请求失败'); }
+  };
+  const handleDeleteRule = async (id) => {
+    if (!window.confirm('确定删除该规则？')) return;
+    await authFetch(`http://127.0.0.1:8000/api/alarm_rules/${id}`, { method: 'DELETE' });
+    fetchAlarmRules();
+  };
+
   return (
-    <div style={mainStyle}>
-      <div style={{ position: 'absolute', right: 32, top: 24, zIndex: 30 }}>
-        {token && authUsername && (
-          <span style={{ marginRight: 12, color: '#0077cc' }}>欢迎，{authUsername}</span>
-        )}
-        {token && (
-          <button onClick={handleLogout} style={{ ...btnStyle, padding: '2px 10px', fontSize: 14 }}>登出</button>
-        )}
-      </div>
-      <h2 style={{ fontSize: 22 }}>SmartOps-AI 智能运维助手 <button style={{ float: 'right', ...btnStyle }} onClick={openKeyModal}>API Key配置</button></h2>
-      {/* 聊天导出按钮 */}
-      <div style={{ marginBottom: 8 }}>
-        <button onClick={exportMarkdown} style={btnStyle}>导出对话(Markdown)</button>
-      </div>
-      {/* 任务列表区优化 */}
-      <div style={{ marginBottom: 12, background: '#f6f8fa', borderRadius: 4, padding: 10 }}>
-        <b>任务列表：</b>
-        {tasks.length === 0 && <span style={{ color: '#aaa', marginLeft: 8 }}>暂无任务，开始对话或分析文件吧</span>}
-        {tasks.length > 0 && (
-          <ul style={{ margin: 0, paddingLeft: 18, fontSize: 14 }}>
-            {tasks.slice(0, 10).map(t => (
-              <li key={t.id} style={{ marginBottom: 2 }}>
-                <span style={{ color: t.type === 'chat' ? '#0077cc' : '#f90' }}>{t.type === 'chat' ? '对话' : '分析'}</span>
-                <span style={{ margin: '0 8px' }}>{t.desc}</span>
-                <span style={{ 
-                  color: t.status === '已完成' ? '#28a745' : t.status === '失败' ? '#dc3545' : '#6c757d',
-                  fontWeight: 'bold'
-                }}>{t.status}</span>
-                <span style={{ marginLeft: 8, color: '#aaa', fontSize: 12 }}>{t.time}</span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-      {/* API Key 配置弹窗 */}
-      {showKeyModal && (
-        <div style={{ position: 'fixed', left: 0, top: 0, width: '100vw', height: '100vh', background: 'rgba(0,0,0,0.2)', zIndex: 10 }}>
-          <div style={{ background: '#fff', padding: 24, borderRadius: 8, width: 340, margin: '120px auto', boxShadow: '0 2px 8px #0002' }}>
-            <h3>API Key 配置</h3>
-            <div style={{ marginBottom: 12 }}>
-              <b>DeepSeek Key：</b>
-              <input type="text" value={tmpKeys.deepseek} onChange={e => setTmpKeys({ ...tmpKeys, deepseek: e.target.value })} style={{ width: 220 }} />
-            </div>
-            <div style={{ marginBottom: 12 }}>
-              <b>通义百炼 Key：</b>
-              <input type="text" value={tmpKeys.tongyi} onChange={e => setTmpKeys({ ...tmpKeys, tongyi: e.target.value })} style={{ width: 220 }} />
-            </div>
-            {keyMsg && <div style={{ color: keyMsg === '保存成功！' ? 'green' : 'red', marginBottom: 8 }}>{keyMsg}</div>}
-            <button onClick={saveKeys} style={{ marginRight: 12 }}>保存</button>
-            <button onClick={() => setShowKeyModal(false)}>取消</button>
-          </div>
+    <div>
+      <style>{responsiveStyle}</style>
+      <style>{themeStyle}</style>
+      <div className="smartops-main" style={mainStyle}>
+        <div style={{ position: 'absolute', right: 32, top: 24, zIndex: 30, display: 'flex', alignItems: 'center' }}>
+          <button className="smartops-btn" onClick={toggleTheme} style={{ marginRight: 12 }}>{theme === 'light' ? '🌙 深色' : '☀️ 浅色'}</button>
+          {token && authUsername && (
+            <span style={{ marginRight: 12, color: '#0077cc' }}>欢迎，{authUsername}</span>
+          )}
+          {token && (
+            <button onClick={handleLogout} className="smartops-btn" style={{ padding: '2px 10px', fontSize: 14 }}>登出</button>
+          )}
+          {/* 用户中心入口 */}
+          {token && (
+            <button className="smartops-btn" onClick={() => setShowPwdModal(true)} style={{ marginRight: 8 }}>修改密码</button>
+          )}
+          {/* 告警规则配置入口 */}
+          {token && (
+            <button className="smartops-btn" onClick={() => { setEditRule({ rule_type: '', condition: '', notify_type: 'email', target: '', enabled: 1 }); setShowAlarmModal(true); }} style={{ marginRight: 8 }}>告警规则</button>
+          )}
         </div>
-      )}
-      {/* 运维场景快捷入口 */}
-      <div style={{ marginBottom: 12 }}>
-        <b>常见运维场景：</b>
-        {SCENARIOS.map(s => (
-          <button key={s.label} style={btnStyle} onClick={() => handleScenario(s.prompt)}>{s.label}</button>
-        ))}
-      </div>
-      {/* 文件上传区 */}
-      <div style={{ marginBottom: 16, background: '#f6f8fa', padding: 12, borderRadius: 4 }}>
-        <b>日志/文件分析：</b>
-        <input type="file" accept=".log,.txt,.conf,.json,.yaml,.yml" onChange={handleFileChange} disabled={uploading} style={{ marginLeft: 8 }} />
-        {uploading && <span style={{ marginLeft: 8, color: '#0077cc' }}>分析中...</span>}
-        {uploadResult && (
-          <div style={{ marginTop: 12, background: '#fff', padding: 12, borderRadius: 4, border: '1px solid #eee' }}>
-            <div style={{ color: '#0077cc', marginBottom: 8, fontWeight: 'bold' }}>分析结果：</div>
-            <ReactMarkdown components={renderers}>{uploadResult}</ReactMarkdown>
-          </div>
-        )}
-        {/* 文件分析历史 */}
-        {analyzeHistory.length > 0 && (
-          <div style={{ marginTop: 12, fontSize: 13 }}>
-            <b>分析历史：</b>
-            <ul style={{ paddingLeft: 18 }}>
-              {analyzeHistory.map((item, idx) => (
-                <li key={idx} style={{ marginBottom: 4 }}>
-                  <span style={{ color: '#888' }}>{item.time}</span> - <b>{item.filename}</b>
-                  <details>
-                    <summary style={{ cursor: 'pointer', color: '#0077cc' }}>查看分析结果</summary>
-                    <div style={{ background: '#fff', border: '1px solid #eee', borderRadius: 4, padding: 8, marginTop: 4 }}>
-                      <ReactMarkdown components={renderers}>{item.result}</ReactMarkdown>
-                    </div>
-                  </details>
+        <h2 style={{ fontSize: 22 }}>SmartOps-AI 智能运维助手 <button style={{ float: 'right', ...btnStyle }} onClick={openKeyModal}>API Key配置</button></h2>
+        {/* 聊天导出按钮 */}
+        <div style={{ marginBottom: 8 }}>
+          <button onClick={exportMarkdown} style={btnStyle}>导出对话(Markdown)</button>
+        </div>
+        {/* 任务列表区优化 */}
+        <div style={{ marginBottom: 12, background: '#f6f8fa', borderRadius: 4, padding: 10 }}>
+          <b>任务列表：</b>
+          {tasks.length === 0 && <span style={{ color: '#aaa', marginLeft: 8 }}>暂无任务，开始对话或分析文件吧</span>}
+          {tasks.length > 0 && (
+            <ul style={{ margin: 0, paddingLeft: 18, fontSize: 14 }}>
+              {tasks.slice(0, 10).map(t => (
+                <li key={t.id} style={{ marginBottom: 2 }}>
+                  <span style={{ color: t.type === 'chat' ? '#0077cc' : '#f90' }}>{t.type === 'chat' ? '对话' : '分析'}</span>
+                  <span style={{ margin: '0 8px' }}>{t.desc}</span>
+                  <span style={{ 
+                    color: t.status === '已完成' ? '#28a745' : t.status === '失败' ? '#dc3545' : '#6c757d',
+                    fontWeight: 'bold'
+                  }}>{t.status}</span>
+                  <span style={{ marginLeft: 8, color: '#aaa', fontSize: 12 }}>{t.time}</span>
                 </li>
               ))}
             </ul>
-          </div>
-        )}
-      </div>
-      <div style={{ marginBottom: 16, display: 'flex', flexWrap: 'wrap', alignItems: 'center' }}>
-        <select value={model} onChange={e => setModel(e.target.value)} style={{ marginRight: 8, fontSize: 15, padding: '4px 8px' }}>
-          {MODEL_OPTIONS.map(opt => (
-            <option key={opt.value} value={opt.value}>{opt.label}</option>
-          ))}
-        </select>
-        <input
-          type="text"
-          value={prompt}
-          onChange={e => setPrompt(e.target.value)}
-          placeholder="请输入运维问题..."
-          style={inputStyle}
-          onKeyDown={e => { if (e.key === 'Enter' && !loading && !streaming) (model === 'deepseek' ? handleStreamSend() : handleSend()); }}
-          disabled={loading || streaming}
-        />
-        {model === 'deepseek' ? (
-          <button onClick={handleStreamSend} disabled={loading || streaming} style={btnStyle}>{streaming ? '流式中...' : '流式对话'}</button>
-        ) : (
-          <button onClick={handleSend} disabled={loading} style={btnStyle}>{loading ? '发送中...' : '发送'}</button>
-        )}
-        <button onClick={clearHistory} style={clearBtnStyle}>清空历史</button>
-      </div>
-      {/* 聊天区优化 */}
-      <div style={{ minHeight: 80, background: '#fff', padding: 12, borderRadius: 4, border: '1px solid #eee', maxHeight: 400, overflowY: 'auto', fontSize: 16 }}>
-        {history.length === 0 && !streaming && (
-          <div style={{ textAlign: 'center', padding: 40, color: '#aaa' }}>
-            <div style={{ fontSize: 18, marginBottom: 8 }}>开始对话</div>
-            <div>输入运维问题，AI 将为您提供专业建议</div>
-          </div>
-        )}
-        {history.map((msg, idx) => (
-          <div key={idx} style={{ 
-            margin: '12px 0', 
-            display: 'flex', 
-            flexDirection: msg.role === 'user' ? 'row-reverse' : 'row',
-            alignItems: 'flex-start'
-          }}>
-            <div style={{
-              maxWidth: '80%',
-              padding: '8px 12px',
-              borderRadius: 12,
-              background: msg.role === 'user' ? '#0077cc' : '#f1f3f4',
-              color: msg.role === 'user' ? 'white' : '#333',
-              wordBreak: 'break-word'
-            }}>
-              <ReactMarkdown components={renderers}>{msg.content}</ReactMarkdown>
-            </div>
-            <div style={{ 
-              margin: msg.role === 'user' ? '0 8px 0 0' : '0 0 0 8px',
-              fontSize: 12, 
-              color: '#aaa',
-              alignSelf: 'flex-end'
-            }}>
-              {msg.role === 'user' ? '我' : 'AI'}
-            </div>
-          </div>
-        ))}
-        {streaming && (
-          <div style={{ 
-            margin: '12px 0', 
-            display: 'flex', 
-            alignItems: 'flex-start'
-          }}>
-            <div style={{
-              maxWidth: '80%',
-              padding: '8px 12px',
-              borderRadius: 12,
-              background: '#f1f3f4',
-              color: '#333',
-              wordBreak: 'break-word'
-            }}>
-              <ReactMarkdown components={renderers}>{streamReply}</ReactMarkdown>
-            </div>
-            <div style={{ 
-              margin: '0 0 0 8px',
-              fontSize: 12, 
-              color: '#aaa',
-              alignSelf: 'flex-end'
-            }}>
-              AI
-            </div>
-          </div>
-        )}
-      </div>
-      {/* 任务历史表格优化 */}
-      <div style={{ marginBottom: 20 }}>
-        <h3>任务历史</h3>
-        {tasks.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: 40, color: '#aaa', background: '#f9f9f9', borderRadius: 8 }}>
-            <div style={{ fontSize: 18, marginBottom: 8 }}>暂无任务历史</div>
-            <div>开始对话或分析文件，任务将在这里显示</div>
-          </div>
-        ) : (
-          <table style={{ width: '100%', background: '#fff', borderCollapse: 'collapse' }}>
-            <thead>
-              <tr style={{ background: '#f6f8fa' }}>
-                <th style={{ border: '1px solid #eee', padding: 8 }}>任务ID</th>
-                <th style={{ border: '1px solid #eee', padding: 8 }}>类型</th>
-                <th style={{ border: '1px solid #eee', padding: 8 }}>状态</th>
-                <th style={{ border: '1px solid #eee', padding: 8 }}>AI</th>
-                <th style={{ border: '1px solid #eee', padding: 8 }}>时间</th>
-                <th style={{ border: '1px solid #eee', padding: 8 }}>操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              {tasks.map(task => (
-                <tr key={task.task_id}>
-                  <td style={{ border: '1px solid #eee', padding: 8, fontSize: 12 }}>{task.task_id}</td>
-                  <td style={{ border: '1px solid #eee', padding: 8 }}>{task.model || '-'}</td>
-                  <td style={{ 
-                    border: '1px solid #eee', 
-                    padding: 8, 
-                    color: task.status === 'completed' ? '#28a745' : task.status === 'failed' ? '#dc3545' : '#6c757d',
-                    fontWeight: 'bold'
-                  }}>{task.status}</td>
-                  <td style={{ border: '1px solid #eee', padding: 8 }}>{task.model || '-'}</td>
-                  <td style={{ border: '1px solid #eee', padding: 8, fontSize: 12 }}>{task.timestamp ? (typeof task.timestamp === 'string' ? task.timestamp : new Date(task.timestamp).toLocaleString()) : '-'}</td>
-                  <td style={{ border: '1px solid #eee', padding: 8 }}>
-                    <button onClick={() => openTaskModal(task)} style={{ padding: '4px 12px', fontSize: 12, marginRight: 4 }}>详情</button>
-                    <button onClick={() => handleContinue(task)} style={{ padding: '4px 12px', fontSize: 12 }}>继续追问</button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-      {detailTask && (
-        <div style={{ background: '#f9f9f9', padding: 18, borderRadius: 8, marginBottom: 20 }}>
-          <h3>任务详情 {polling && <span style={{ color: '#888', fontSize: 14 }}>（进度轮询中...）</span>}</h3>
-          <div><b>任务ID:</b> {detailTask.task_id}</div>
-          <div><b>状态:</b> {detailTask.status}</div>
-          <div><b>AI提供商:</b> {detailTask.provider}</div>
-          <div><b>分析结果:</b></div>
-          <pre style={{ background: '#fff', padding: 10, borderRadius: 4 }}>{detailTask.result}</pre>
-          {renderStructured(detailTask)}
-          {detailTask.suggestions && detailTask.suggestions.length > 0 && (
-            <div><b>建议:</b><ul>{detailTask.suggestions.map((s, i) => <li key={i}>{s}</li>)}</ul></div>
           )}
         </div>
-      )}
-      {showAuthModal && (
-        <div style={{ position: 'fixed', left: 0, top: 0, width: '100vw', height: '100vh', background: 'rgba(0,0,0,0.2)', zIndex: 20 }}>
-          <div style={{ background: '#fff', padding: 24, borderRadius: 8, width: 340, margin: '120px auto', boxShadow: '0 2px 8px #0002' }}>
-            <h3>{authMode === 'login' ? '登录' : '注册'} SmartOps-AI</h3>
-            <div style={{ marginBottom: 12 }}>
-              <b>用户名：</b>
-              <input 
-                type="text" 
-                value={authUsername} 
-                onChange={e => setAuthUsername(e.target.value)} 
-                onKeyDown={handleAuthKeyDown}
-                style={{ width: 220 }} 
-                disabled={authLoading}
-              />
+        {/* API Key 配置弹窗 */}
+        {showKeyModal && (
+          <div className="smartops-modal">
+            <div style={{ background: '#fff', padding: 24, borderRadius: 8, width: 340, margin: '120px auto', boxShadow: '0 2px 8px #0002' }}>
+              <h3>API Key 配置</h3>
+              <div style={{ marginBottom: 12 }}>
+                <b>DeepSeek Key：</b>
+                <input type="text" value={tmpKeys.deepseek} onChange={e => setTmpKeys({ ...tmpKeys, deepseek: e.target.value })} style={{ width: 220 }} />
+              </div>
+              <div style={{ marginBottom: 12 }}>
+                <b>通义百炼 Key：</b>
+                <input type="text" value={tmpKeys.tongyi} onChange={e => setTmpKeys({ ...tmpKeys, tongyi: e.target.value })} style={{ width: 220 }} />
+              </div>
+              {keyMsg && <div style={{ color: keyMsg === '保存成功！' ? 'green' : 'red', marginBottom: 8 }}>{keyMsg}</div>}
+              <button onClick={saveKeys} style={{ marginRight: 12 }}>保存</button>
+              <button onClick={() => setShowKeyModal(false)}>取消</button>
             </div>
-            <div style={{ marginBottom: 12 }}>
-              <b>密码：</b>
-              <input 
-                type="password" 
-                value={authPassword} 
-                onChange={e => setAuthPassword(e.target.value)} 
-                onKeyDown={handleAuthKeyDown}
-                style={{ width: 220 }} 
-                disabled={authLoading}
-              />
+          </div>
+        )}
+        {/* 运维场景快捷入口 */}
+        <div style={{ marginBottom: 12 }}>
+          <b>常见运维场景：</b>
+          {SCENARIOS.map(s => (
+            <button key={s.label} style={btnStyle} onClick={() => handleScenario(s.prompt)}>{s.label}</button>
+          ))}
+        </div>
+        {/* 文件上传区 */}
+        <div style={{ marginBottom: 16, background: '#f6f8fa', padding: 12, borderRadius: 4 }}>
+          <b>日志/文件分析：</b>
+          <input type="file" accept=".log,.txt,.conf,.json,.yaml,.yml" onChange={handleFileChange} disabled={uploading} style={{ marginLeft: 8 }} />
+          {uploading && <span style={{ marginLeft: 8, color: '#0077cc' }}>分析中...</span>}
+          {uploadResult && (
+            <div style={{ marginTop: 12, background: '#fff', padding: 12, borderRadius: 4, border: '1px solid #eee' }}>
+              <div style={{ color: '#0077cc', marginBottom: 8, fontWeight: 'bold' }}>分析结果：</div>
+              <ReactMarkdown components={renderers}>{uploadResult}</ReactMarkdown>
             </div>
-            {authError && <div style={{ color: 'red', marginBottom: 8, fontSize: 14 }}>{authError}</div>}
-            <button 
-              onClick={handleAuth} 
-              disabled={authLoading}
-              style={{ 
-                marginRight: 12, 
-                background: authLoading ? '#ccc' : '#0077cc', 
-                color: 'white',
-                border: 'none',
-                padding: '6px 16px',
-                borderRadius: 4,
-                cursor: authLoading ? 'not-allowed' : 'pointer'
-              }}
-            >
-              {authLoading ? '处理中...' : (authMode === 'login' ? '登录' : '注册')}
-            </button>
-            <button 
-              onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')} 
-              disabled={authLoading}
-              style={{ marginRight: 12 }}
-            >
-              {authMode === 'login' ? '没有账号？注册' : '已有账号？登录'}
-            </button>
-            <button onClick={() => setShowAuthModal(false)} disabled={authLoading}>取消</button>
-          </div>
+          )}
+          {/* 文件分析历史 */}
+          {analyzeHistory.length > 0 && (
+            <div style={{ marginTop: 12, fontSize: 13 }}>
+              <b>分析历史：</b>
+              <ul style={{ paddingLeft: 18 }}>
+                {analyzeHistory.map((item, idx) => (
+                  <li key={idx} style={{ marginBottom: 4 }}>
+                    <span style={{ color: '#888' }}>{item.time}</span> - <b>{item.filename}</b>
+                    <details>
+                      <summary style={{ cursor: 'pointer', color: '#0077cc' }}>查看分析结果</summary>
+                      <div style={{ background: '#fff', border: '1px solid #eee', borderRadius: 4, padding: 8, marginTop: 4 }}>
+                        <ReactMarkdown components={renderers}>{item.result}</ReactMarkdown>
+                      </div>
+                    </details>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
-      )}
-      {showTaskModal && modalTask && (
-        <div style={{ position: 'fixed', left: 0, top: 0, width: '100vw', height: '100vh', background: 'rgba(0,0,0,0.25)', zIndex: 30 }}>
-          <div style={{ background: '#fff', borderRadius: 10, width: 480, maxWidth: '96vw', margin: '60px auto', boxShadow: '0 4px 24px #0003', padding: 28, position: 'relative' }}>
-            <button onClick={closeTaskModal} style={{ position: 'absolute', right: 18, top: 18, fontSize: 18, background: 'none', border: 'none', cursor: 'pointer', color: '#888' }}>×</button>
-            <h3 style={{ marginBottom: 12 }}>任务详情</h3>
-            <div style={{ marginBottom: 8 }}><b>任务ID：</b>{modalTask.task_id}</div>
-            <div style={{ marginBottom: 8 }}><b>类型：</b>{modalTask.model || '-'}</div>
-            <div style={{ marginBottom: 8 }}><b>状态：</b><span style={{ color: modalTask.status === 'completed' ? '#28a745' : modalTask.status === 'failed' ? '#dc3545' : '#6c757d', fontWeight: 'bold' }}>{modalTask.status}</span></div>
-            <div style={{ marginBottom: 8 }}><b>时间：</b>{modalTask.timestamp ? (typeof modalTask.timestamp === 'string' ? modalTask.timestamp : new Date(modalTask.timestamp).toLocaleString()) : '-'}</div>
-            <div style={{ marginBottom: 8 }}><b>Prompt：</b><div style={{ background: '#f6f8fa', borderRadius: 6, padding: 8, marginTop: 4 }}>{modalTask.prompt}</div></div>
-            <div style={{ marginBottom: 8 }}><b>AI回复：</b><div style={{ background: '#f6f8fa', borderRadius: 6, padding: 8, marginTop: 4 }}><ReactMarkdown components={renderers}>{modalTask.result}</ReactMarkdown></div></div>
-            {modalTask.structured && Object.keys(modalTask.structured).length > 0 && (
-              <div style={{ marginBottom: 8 }}>
-                <b>结构化结果：</b>
-                <div style={{ marginTop: 4 }}>
-                  {Object.entries(modalTask.structured).map(([k, v]) => (
-                    <div key={k} style={{ background: '#eaf6ff', borderRadius: 4, padding: '4px 8px', marginBottom: 4 }}><b>{k}：</b>{v}</div>
-                  ))}
-                </div>
+        <div style={{ marginBottom: 16, display: 'flex', flexWrap: 'wrap', alignItems: 'center' }}>
+          <select value={model} onChange={e => setModel(e.target.value)} style={{ marginRight: 8, fontSize: 15, padding: '4px 8px' }}>
+            {MODEL_OPTIONS.map(opt => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+          {/* 聊天输入区输入框改为 textarea，支持多行，Ctrl+Enter 发送 */}
+          <textarea
+            className="smartops-input"
+            value={prompt}
+            onChange={e => setPrompt(e.target.value)}
+            placeholder="请输入运维问题..."
+            style={inputStyle}
+            onKeyDown={handleChatInputKeyDown}
+            disabled={loading || streaming}
+            rows={model === 'deepseek' ? 2 : 2}
+          />
+          {model === 'deepseek' ? (
+            <button onClick={handleStreamSend} disabled={loading || streaming} style={btnStyle}>{streaming ? '流式中...' : '流式对话'}</button>
+          ) : (
+            <button onClick={handleSend} disabled={loading} style={btnStyle}>{loading ? '发送中...' : '发送'}</button>
+          )}
+          <button onClick={clearHistory} style={clearBtnStyle}>清空历史</button>
+        </div>
+        {/* 聊天区优化 */}
+        <div style={{ minHeight: 80, background: '#fff', padding: 12, borderRadius: 4, border: '1px solid #eee', maxHeight: 400, overflowY: 'auto', fontSize: 16 }}>
+          {history.length === 0 && !streaming && (
+            <div style={{ textAlign: 'center', padding: 40, color: '#aaa' }}>
+              <div style={{ fontSize: 18, marginBottom: 8 }}>开始对话</div>
+              <div>输入运维问题，AI 将为您提供专业建议</div>
+            </div>
+          )}
+          {history.map((msg, idx) => (
+            <div key={idx} style={{ 
+              margin: '12px 0', 
+              display: 'flex', 
+              flexDirection: msg.role === 'user' ? 'row-reverse' : 'row',
+              alignItems: 'flex-start'
+            }}>
+              <div style={{
+                maxWidth: '80%',
+                padding: '8px 12px',
+                borderRadius: 12,
+                background: msg.role === 'user' ? '#0077cc' : '#f1f3f4',
+                color: msg.role === 'user' ? 'white' : '#333',
+                wordBreak: 'break-word'
+              }}>
+                <ReactMarkdown components={renderers}>{msg.content}</ReactMarkdown>
               </div>
-            )}
-            {modalTask.suggestions && modalTask.suggestions.length > 0 && (
-              <div style={{ marginBottom: 8 }}>
-                <b>建议：</b>
-                <ul style={{ margin: '4px 0 0 18px' }}>
-                  {modalTask.suggestions.map((s, i) => <li key={i}>{s}</li>)}
-                </ul>
+              <div style={{ 
+                margin: msg.role === 'user' ? '0 8px 0 0' : '0 0 0 8px',
+                fontSize: 12, 
+                color: '#aaa',
+                alignSelf: 'flex-end'
+              }}>
+                {msg.role === 'user' ? '我' : 'AI'}
               </div>
-            )}
-            {modalTask.messages && Array.isArray(modalTask.messages) && modalTask.messages.length > 0 && (
-              <div style={{ marginBottom: 8 }}>
-                <b>消息历史：</b>
-                <div style={{ background: '#f9f9f9', borderRadius: 4, padding: 8, marginTop: 4, maxHeight: 120, overflowY: 'auto' }}>
-                  {modalTask.messages.map((m, i) => (
-                    <div key={i} style={{ color: m.role === 'user' ? '#0077cc' : '#333', marginBottom: 4 }}><b>{m.role}：</b>{m.content}</div>
-                  ))}
-                </div>
+            </div>
+          ))}
+          {streaming && (
+            <div style={{ 
+              margin: '12px 0', 
+              display: 'flex', 
+              alignItems: 'flex-start'
+            }}>
+              <div style={{
+                maxWidth: '80%',
+                padding: '8px 12px',
+                borderRadius: 12,
+                background: '#f1f3f4',
+                color: '#333',
+                wordBreak: 'break-word'
+              }}>
+                <ReactMarkdown components={renderers}>{streamReply}</ReactMarkdown>
               </div>
+              <div style={{ 
+                margin: '0 0 0 8px',
+                fontSize: 12, 
+                color: '#aaa',
+                alignSelf: 'flex-end'
+              }}>
+                AI
+              </div>
+            </div>
+          )}
+        </div>
+        {/* 任务历史表格优化 */}
+        <div style={{ marginBottom: 20 }}>
+          <h3>任务历史</h3>
+          {tasks.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: 40, color: '#aaa', background: '#f9f9f9', borderRadius: 8 }}>
+              <div style={{ fontSize: 18, marginBottom: 8 }}>暂无任务历史</div>
+              <div>开始对话或分析文件，任务将在这里显示</div>
+            </div>
+          ) : (
+            <table className="smartops-table" style={{ width: '100%', background: '#fff', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ background: '#f6f8fa' }}>
+                  <th style={{ border: '1px solid #eee', padding: 8 }}></th>
+                  <th style={{ border: '1px solid #eee', padding: 8 }}>任务ID</th>
+                  <th style={{ border: '1px solid #eee', padding: 8 }}>类型</th>
+                  <th style={{ border: '1px solid #eee', padding: 8 }}>状态</th>
+                  <th style={{ border: '1px solid #eee', padding: 8 }}>AI</th>
+                  <th style={{ border: '1px solid #eee', padding: 8 }}>时间</th>
+                  <th style={{ border: '1px solid #eee', padding: 8 }}>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {tasks.map(task => (
+                  <tr key={task.task_id}>
+                    <td style={{ border: '1px solid #eee', padding: 8 }}>
+                      <input type="checkbox" checked={selectedTasks.includes(task.task_id)} onChange={() => toggleTaskSelect(task.task_id)} />
+                    </td>
+                    <td style={{ border: '1px solid #eee', padding: 8, fontSize: 12 }}>{task.task_id}</td>
+                    <td style={{ border: '1px solid #eee', padding: 8 }}>{task.model || '-'}</td>
+                    <td style={{ 
+                      border: '1px solid #eee', 
+                      padding: 8, 
+                      color: task.status === 'completed' ? '#28a745' : task.status === 'failed' ? '#dc3545' : '#6c757d',
+                      fontWeight: 'bold'
+                    }}>{task.status}</td>
+                    <td style={{ border: '1px solid #eee', padding: 8 }}>{task.model || '-'}</td>
+                    <td style={{ border: '1px solid #eee', padding: 8, fontSize: 12 }}>{task.timestamp ? (typeof task.timestamp === 'string' ? task.timestamp : new Date(task.timestamp).toLocaleString()) : '-'}</td>
+                    <td style={{ border: '1px solid #eee', padding: 8 }}>
+                      <button onClick={() => openTaskModal(task)} style={{ padding: '4px 12px', fontSize: 12, marginRight: 4 }}>详情</button>
+                      <button onClick={() => handleContinue(task)} style={{ padding: '4px 12px', fontSize: 12 }}>继续追问</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+        {/* 任务历史表格批量操作区 */}
+        <div style={{ marginBottom: 8, display: 'flex', alignItems: 'center' }}>
+          <input type="checkbox" checked={selectedTasks.length === tasks.length && tasks.length > 0} onChange={selectAllTasks} style={{ marginRight: 8 }} />
+          <span style={{ marginRight: 16 }}>全选</span>
+          <button className="smartops-btn" onClick={batchDeleteTasks} disabled={selectedTasks.length === 0} style={{ marginRight: 8 }}>批量删除</button>
+          <button className="smartops-btn" onClick={batchExportTasks} disabled={selectedTasks.length === 0}>批量导出</button>
+        </div>
+        {detailTask && (
+          <div style={{ background: '#f9f9f9', padding: 18, borderRadius: 8, marginBottom: 20 }}>
+            <h3>任务详情 {polling && <span style={{ color: '#888', fontSize: 14 }}>（进度轮询中...）</span>}</h3>
+            <div><b>任务ID:</b> {detailTask.task_id}</div>
+            <div><b>状态:</b> {detailTask.status}</div>
+            <div><b>AI提供商:</b> {detailTask.provider}</div>
+            <div><b>分析结果:</b></div>
+            <pre style={{ background: '#fff', padding: 10, borderRadius: 4 }}>{detailTask.result}</pre>
+            {renderStructured(detailTask)}
+            {detailTask.suggestions && detailTask.suggestions.length > 0 && (
+              <div><b>建议:</b><ul>{detailTask.suggestions.map((s, i) => <li key={i}>{s}</li>)}</ul></div>
             )}
           </div>
-        </div>
-      )}
+        )}
+        {showAuthModal && (
+          <div className="smartops-modal">
+            <div style={{ background: '#fff', padding: 24, borderRadius: 8, width: 340, margin: '120px auto', boxShadow: '0 2px 8px #0002' }}>
+              <h3>{authMode === 'login' ? '登录' : '注册'} SmartOps-AI</h3>
+              <div style={{ marginBottom: 12 }}>
+                <b>用户名：</b>
+                <input 
+                  type="text" 
+                  value={authUsername} 
+                  onChange={e => setAuthUsername(e.target.value)} 
+                  onKeyDown={handleAuthKeyDown}
+                  style={{ width: 220 }} 
+                  disabled={authLoading}
+                />
+              </div>
+              <div style={{ marginBottom: 12 }}>
+                <b>密码：</b>
+                <input 
+                  type="password" 
+                  value={authPassword} 
+                  onChange={e => setAuthPassword(e.target.value)} 
+                  onKeyDown={handleAuthKeyDown}
+                  style={{ width: 220 }} 
+                  disabled={authLoading}
+                />
+              </div>
+              {authError && <div style={{ color: 'red', marginBottom: 8, fontSize: 14 }}>{authError}</div>}
+              <button 
+                onClick={handleAuth} 
+                disabled={authLoading}
+                style={{ 
+                  marginRight: 12, 
+                  background: authLoading ? '#ccc' : '#0077cc', 
+                  color: 'white',
+                  border: 'none',
+                  padding: '6px 16px',
+                  borderRadius: 4,
+                  cursor: authLoading ? 'not-allowed' : 'pointer'
+                }}
+              >
+                {authLoading ? '处理中...' : (authMode === 'login' ? '登录' : '注册')}
+              </button>
+              <button 
+                onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')} 
+                disabled={authLoading}
+                style={{ marginRight: 12 }}
+              >
+                {authMode === 'login' ? '没有账号？注册' : '已有账号？登录'}
+              </button>
+              <button onClick={() => setShowAuthModal(false)} disabled={authLoading}>取消</button>
+            </div>
+          </div>
+        )}
+        {showTaskModal && modalTask && (
+          <div className="smartops-modal">
+            <div style={{ background: '#fff', borderRadius: 10, width: 480, maxWidth: '96vw', margin: '60px auto', boxShadow: '0 4px 24px #0003', padding: 28, position: 'relative' }}>
+              <button onClick={closeTaskModal} style={{ position: 'absolute', right: 18, top: 18, fontSize: 18, background: 'none', border: 'none', cursor: 'pointer', color: '#888' }}>×</button>
+              <h3 style={{ marginBottom: 12 }}>任务详情</h3>
+              <div style={{ marginBottom: 8 }}><b>任务ID：</b>{modalTask.task_id}</div>
+              <div style={{ marginBottom: 8 }}><b>类型：</b>{modalTask.model || '-'}</div>
+              <div style={{ marginBottom: 8 }}><b>状态：</b><span style={{ color: modalTask.status === 'completed' ? '#28a745' : modalTask.status === 'failed' ? '#dc3545' : '#6c757d', fontWeight: 'bold' }}>{modalTask.status}</span></div>
+              <div style={{ marginBottom: 8 }}><b>时间：</b>{modalTask.timestamp ? (typeof modalTask.timestamp === 'string' ? modalTask.timestamp : new Date(modalTask.timestamp).toLocaleString()) : '-'}</div>
+              <div style={{ marginBottom: 8 }}><b>Prompt：</b><div style={{ background: '#f6f8fa', borderRadius: 6, padding: 8, marginTop: 4 }}>{modalTask.prompt}</div></div>
+              <div style={{ marginBottom: 8 }}><b>AI回复：</b><div style={{ background: '#f6f8fa', borderRadius: 6, padding: 8, marginTop: 4 }}><ReactMarkdown components={renderers}>{modalTask.result}</ReactMarkdown></div></div>
+              {modalTask.structured && Object.keys(modalTask.structured).length > 0 && (
+                <div style={{ marginBottom: 8 }}>
+                  <b>结构化结果：</b>
+                  <div style={{ marginTop: 4 }}>
+                    {Object.entries(modalTask.structured).map(([k, v]) => (
+                      <div key={k} style={{ background: '#eaf6ff', borderRadius: 4, padding: '4px 8px', marginBottom: 4 }}><b>{k}：</b>{v}</div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {modalTask.suggestions && modalTask.suggestions.length > 0 && (
+                <div style={{ marginBottom: 8 }}>
+                  <b>建议：</b>
+                  <ul style={{ margin: '4px 0 0 18px' }}>
+                    {modalTask.suggestions.map((s, i) => <li key={i}>{s}</li>)}
+                  </ul>
+                </div>
+              )}
+              {modalTask.messages && Array.isArray(modalTask.messages) && modalTask.messages.length > 0 && (
+                <div style={{ marginBottom: 8 }}>
+                  <b>消息历史：</b>
+                  <div style={{ background: '#f9f9f9', borderRadius: 4, padding: 8, marginTop: 4, maxHeight: 120, overflowY: 'auto' }}>
+                    {modalTask.messages.map((m, i) => (
+                      <div key={i} style={{ color: m.role === 'user' ? '#0077cc' : '#333', marginBottom: 4 }}><b>{m.role}：</b>{m.content}</div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+        {/* 修改密码弹窗 */}
+        {showPwdModal && (
+          <div className="smartops-modal">
+            <div style={{ background: '#fff', padding: 24, borderRadius: 8, width: 340, margin: '120px auto', boxShadow: '0 2px 8px #0002', position: 'relative' }}>
+              <button onClick={() => setShowPwdModal(false)} style={{ position: 'absolute', right: 12, top: 12, fontSize: 18, background: 'none', border: 'none', cursor: 'pointer', color: '#888' }}>×</button>
+              <h3>修改密码</h3>
+              <div style={{ marginBottom: 12 }}>
+                <b>原密码：</b>
+                <input type="password" value={oldPwd} onChange={e => setOldPwd(e.target.value)} className="smartops-input" style={{ width: 220 }} />
+              </div>
+              <div style={{ marginBottom: 12 }}>
+                <b>新密码：</b>
+                <input type="password" value={newPwd} onChange={e => setNewPwd(e.target.value)} className="smartops-input" style={{ width: 220 }} />
+              </div>
+              {pwdMsg && <div style={{ color: pwdMsg === '修改成功！' ? 'green' : 'red', marginBottom: 8 }}>{pwdMsg}</div>}
+              <button className="smartops-btn" onClick={handleChangePwd}>提交</button>
+            </div>
+          </div>
+        )}
+        {/* 告警规则列表 */}
+        {token && (
+          <div style={{ margin: '24px 0', background: '#f6f8fa', borderRadius: 8, padding: 16 }}>
+            <h3>告警规则</h3>
+            <table className="smartops-table" style={{ width: '100%', marginBottom: 12 }}>
+              <thead>
+                <tr>
+                  <th>类型</th><th>条件</th><th>方式</th><th>目标</th><th>启用</th><th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {alarmRules.map(r => (
+                  <tr key={r.id}>
+                    <td>{r.rule_type}</td>
+                    <td>{r.condition}</td>
+                    <td>{r.notify_type}</td>
+                    <td>{r.target}</td>
+                    <td>{r.enabled ? '是' : '否'}</td>
+                    <td>
+                      <button className="smartops-btn" onClick={() => { setEditRule(r); setShowAlarmModal(true); }} style={{ marginRight: 6 }}>编辑</button>
+                      <button className="smartops-btn" onClick={() => handleDeleteRule(r.id)}>删除</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {/* 告警规则编辑弹窗 */}
+        {showAlarmModal && (
+          <div className="smartops-modal">
+            <div style={{ background: '#fff', padding: 24, borderRadius: 8, width: 360, margin: '120px auto', boxShadow: '0 2px 8px #0002', position: 'relative' }}>
+              <button onClick={() => setShowAlarmModal(false)} style={{ position: 'absolute', right: 12, top: 12, fontSize: 18, background: 'none', border: 'none', cursor: 'pointer', color: '#888' }}>×</button>
+              <h3>{editRule.id ? '编辑' : '新增'}告警规则</h3>
+              <div style={{ marginBottom: 12 }}>
+                <b>类型：</b>
+                <input className="smartops-input" value={editRule.rule_type} onChange={e => setEditRule({ ...editRule, rule_type: e.target.value })} style={{ width: 220 }} placeholder="如 chat/analyze" />
+              </div>
+              <div style={{ marginBottom: 12 }}>
+                <b>条件：</b>
+                <input className="smartops-input" value={editRule.condition} onChange={e => setEditRule({ ...editRule, condition: e.target.value })} style={{ width: 220 }} placeholder="如 failed/all" />
+              </div>
+              <div style={{ marginBottom: 12 }}>
+                <b>方式：</b>
+                <select className="smartops-input" value={editRule.notify_type} onChange={e => setEditRule({ ...editRule, notify_type: e.target.value })} style={{ width: 220 }}>
+                  <option value="email">邮件</option>
+                  <option value="webhook">Webhook</option>
+                  <option value="feishu">飞书</option>
+                </select>
+              </div>
+              <div style={{ marginBottom: 12 }}>
+                <b>目标：</b>
+                <input className="smartops-input" value={editRule.target} onChange={e => setEditRule({ ...editRule, target: e.target.value })} style={{ width: 220 }} placeholder="邮箱/URL/飞书Webhook" />
+              </div>
+              <div style={{ marginBottom: 12 }}>
+                <b>启用：</b>
+                <select className="smartops-input" value={editRule.enabled} onChange={e => setEditRule({ ...editRule, enabled: Number(e.target.value) })} style={{ width: 220 }}>
+                  <option value={1}>是</option>
+                  <option value={0}>否</option>
+                </select>
+              </div>
+              {alarmMsg && <div style={{ color: alarmMsg === '保存成功！' ? 'green' : 'red', marginBottom: 8 }}>{alarmMsg}</div>}
+              <button className="smartops-btn" onClick={handleSaveRule}>保存</button>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
